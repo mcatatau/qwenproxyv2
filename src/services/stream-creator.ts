@@ -171,9 +171,15 @@ export interface ClientConversationEntry {
   accountId: string;
   parentId: string | null;
   timestamp: number;
+  fullHash?: string;
+  cleanHash?: string;
+  lastAssistantContent?: string;
+  lastUserContent?: string;
 }
 
 export const clientConversationsMap: Map<string, ClientConversationEntry> = new Map();
+const recentConversations: ClientConversationEntry[] = [];
+const MAX_RECENT_CONVERSATIONS = 1000;
 
 function cleanupStaleClientConversations() {
   const now = Date.now();
@@ -184,13 +190,25 @@ function cleanupStaleClientConversations() {
   }
 }
 
-export function getClientConversation(hash: string): ClientConversationEntry | undefined {
-  return clientConversationsMap.get(hash);
+function getCleanMessages(messages: any[]): Array<{ role: string; content: string }> {
+  return messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => {
+      let contentStr = '';
+      if (typeof m.content === 'string') {
+        contentStr = m.content;
+      } else if (Array.isArray(m.content)) {
+        contentStr = m.content.map((p: any) => p.text || '').join('\n');
+      } else if (m.content && typeof m.content === 'object') {
+        contentStr = m.content.text || JSON.stringify(m.content);
+      }
+      return { role: m.role, content: contentStr.trim() };
+    });
 }
 
-export function saveClientConversation(hash: string, entry: Omit<ClientConversationEntry, 'timestamp'>) {
-  if (clientConversationsMap.size > 10000) cleanupStaleClientConversations();
-  clientConversationsMap.set(hash, { ...entry, timestamp: Date.now() });
+function calculateCleanHash(cleanMessages: Array<{ role: string; content: string }>): string {
+  const serialized = cleanMessages.map(m => `${m.role}:${m.content}`).join('|');
+  return crypto.createHash('sha256').update(serialized).digest('hex');
 }
 
 export function calculateConversationHash(messages: Array<{ role: string; content?: string | null | any }>): string {
@@ -206,6 +224,114 @@ export function calculateConversationHash(messages: Array<{ role: string; conten
     return `${m.role}:${contentStr}`;
   }).join('|');
   return crypto.createHash('sha256').update(serialized).digest('hex');
+}
+
+export function getClientConversation(messagesOrHash: any[] | string): ClientConversationEntry | undefined {
+  if (typeof messagesOrHash === 'string') {
+    return clientConversationsMap.get(messagesOrHash);
+  }
+
+  if (!Array.isArray(messagesOrHash) || messagesOrHash.length === 0) {
+    return undefined;
+  }
+
+  // 1. Coincidencia exacta usando el hash del historial completo (incluye System Prompt)
+  const fullHash = calculateConversationHash(messagesOrHash);
+  const exactMatch = clientConversationsMap.get(fullHash);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  // 2. Coincidencia limpia de turnos de usuario y asistente (ignora System Prompt dinámico)
+  const cleanMsgs = getCleanMessages(messagesOrHash);
+  if (cleanMsgs.length > 0) {
+    const cleanHash = calculateCleanHash(cleanMsgs);
+    const cleanMatch = clientConversationsMap.get(cleanHash);
+    if (cleanMatch) {
+      console.log(`[Caché] Coincidencia encontrada usando hash limpio (sistema ignorado): ${cleanMatch.chatId}`);
+      return cleanMatch;
+    }
+  }
+
+  // 3. Coincidencia difusa (Fuzzy Matching): buscar en el buffer de conversaciones recientes
+  const assistantMsgs = cleanMsgs.filter(m => m.role === 'assistant');
+  const userMsgs = cleanMsgs.filter(m => m.role === 'user');
+
+  if (assistantMsgs.length > 0 && userMsgs.length > 0) {
+    const lastAssistantText = assistantMsgs[assistantMsgs.length - 1].content;
+    const lastUserText = userMsgs[userMsgs.length - 1].content;
+
+    // Buscar de más nuevo a más viejo para priorizar sesiones activas
+    for (let i = recentConversations.length - 1; i >= 0; i--) {
+      const entry = recentConversations[i];
+      if (entry.lastAssistantContent === lastAssistantText && entry.lastUserContent === lastUserText) {
+        console.log(`[Caché] Coincidencia encontrada usando contenido del último turno (asistente + usuario): ${entry.chatId}`);
+        return entry;
+      }
+    }
+
+    // Coincidencia secundaria: buscar sólo por el contenido de la última respuesta del asistente (si es lo bastante larga)
+    if (lastAssistantText.length > 20) {
+      for (let i = recentConversations.length - 1; i >= 0; i--) {
+        const entry = recentConversations[i];
+        if (entry.lastAssistantContent === lastAssistantText) {
+          console.log(`[Caché] Coincidencia encontrada usando el contenido del último asistente: ${entry.chatId}`);
+          return entry;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+export function saveClientConversation(messagesOrHash: any[] | string, entry: Omit<ClientConversationEntry, 'timestamp'>) {
+  if (clientConversationsMap.size > 10000) {
+    cleanupStaleClientConversations();
+  }
+
+  let fullHash = '';
+  let cleanHash = '';
+  let lastAssistantContent = '';
+  let lastUserContent = '';
+
+  if (typeof messagesOrHash === 'string') {
+    fullHash = messagesOrHash;
+  } else if (Array.isArray(messagesOrHash)) {
+    fullHash = calculateConversationHash(messagesOrHash);
+    const cleanMsgs = getCleanMessages(messagesOrHash);
+    cleanHash = calculateCleanHash(cleanMsgs);
+
+    const assistantMsgs = cleanMsgs.filter(m => m.role === 'assistant');
+    if (assistantMsgs.length > 0) {
+      lastAssistantContent = assistantMsgs[assistantMsgs.length - 1].content;
+    }
+    const userMsgs = cleanMsgs.filter(m => m.role === 'user');
+    if (userMsgs.length > 0) {
+      lastUserContent = userMsgs[userMsgs.length - 1].content;
+    }
+  }
+
+  const newEntry: ClientConversationEntry = {
+    ...entry,
+    timestamp: Date.now(),
+    fullHash,
+    cleanHash,
+    lastAssistantContent,
+    lastUserContent
+  };
+
+  if (fullHash) {
+    clientConversationsMap.set(fullHash, newEntry);
+  }
+  if (cleanHash) {
+    clientConversationsMap.set(cleanHash, newEntry);
+  }
+
+  recentConversations.push(newEntry);
+  if (recentConversations.length > MAX_RECENT_CONVERSATIONS) {
+    recentConversations.shift();
+  }
 }
 
 export function getSessionParent(sessionId: string): string | null {

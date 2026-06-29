@@ -337,7 +337,7 @@ export function handleStreamingResponse(c: Context, ctx: StreamHandlerContext): 
           
           const updatedHistory = [...ctx.messages, assistantMessage];
           const nextHash = calculateConversationHash(updatedHistory);
-          saveClientConversation(nextHash, {
+          saveClientConversation(updatedHistory, {
             chatId: ctx.uiSessionId,
             accountId: ctx.accountId,
             parentId: latestParentId
@@ -463,7 +463,7 @@ export function handleNonStreamingResponse(
 
         const updatedHistory = [...messages, assistantMessage];
         const nextHash = calculateConversationHash(updatedHistory);
-        saveClientConversation(nextHash, {
+        saveClientConversation(updatedHistory, {
           chatId: uiSessionId,
           accountId,
           parentId: latestParentId

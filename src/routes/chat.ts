@@ -181,8 +181,7 @@ export async function chatCompletions(c: Context) {
 
     if (!isGuestModeOnly && messages.length > 1) {
       const previousMessages = messages.slice(0, -1);
-      const prevHash = calculateConversationHash(previousMessages);
-      const cachedConv = getClientConversation(prevHash);
+      const cachedConv = getClientConversation(previousMessages);
 
       if (cachedConv) {
         const cooldownInfo = getAccountCooldownInfo(cachedConv.accountId);
