@@ -188,20 +188,12 @@ export async function chatCompletions(c: Context) {
         if (!cooldownInfo) {
           const activeAccounts = getAccountsWithCooldownSync();
           
-          // Verificar si el usuario cambió la prioridad/cuenta preferencial activa en el dashboard
-          const preferredAccount = activeAccounts[0];
-          const isPreferredChanged = preferredAccount && cachedConv.accountId !== preferredAccount.id;
-
-          if (!isPreferredChanged) {
-            const matchedAccount = activeAccounts.find((a: any) => a.id === cachedConv.accountId);
-            if (matchedAccount && !getInUseAccounts().includes(cachedConv.accountId)) {
-              isStateful = true;
-              targetAccountId = cachedConv.accountId;
-              forcedChatId = cachedConv.chatId;
-              forcedParentId = cachedConv.parentId;
-            }
-          } else {
-            console.log(`[Chat] Cambio de cuenta activa detectado (${cachedConv.accountId} -> ${preferredAccount.id}). Forzando reinicio de chat en la cuenta preferente.`);
+          const matchedAccount = activeAccounts.find((a: any) => a.id === cachedConv.accountId);
+          if (matchedAccount && !getInUseAccounts().includes(cachedConv.accountId)) {
+            isStateful = true;
+            targetAccountId = cachedConv.accountId;
+            forcedChatId = cachedConv.chatId;
+            forcedParentId = cachedConv.parentId;
           }
         }
       }
